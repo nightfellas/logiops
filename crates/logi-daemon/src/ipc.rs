@@ -37,6 +37,7 @@ pub struct IpcServer {
     socket_path: PathBuf,
     event_tx: broadcast::Sender<String>,
     profile_manager: Option<Arc<Mutex<ProfileManager>>>,
+    devices: Arc<Mutex<std::collections::HashMap<String, Value>>>,
 }
 
 impl IpcServer {
@@ -50,6 +51,13 @@ impl IpcServer {
             socket_path: get_socket_path(),
             event_tx,
             profile_manager: pm,
+            devices: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    pub fn update_device(&self, key: String, data: Value) {
+        if let Ok(mut map) = self.devices.lock() {
+            map.insert(key, data);
         }
     }
 
@@ -133,9 +141,16 @@ impl IpcServer {
                         "version": env!("CARGO_PKG_VERSION"),
                         "daemon": "logi-daemon",
                     })),
-                    "device.list" => Ok(serde_json::json!({
-                        "devices": []
-                    })),
+                    "device.list" => {
+                        let devs = if let Ok(map) = self.devices.lock() {
+                            map.values().cloned().collect::<Vec<_>>()
+                        } else {
+                            Vec::new()
+                        };
+                        Ok(serde_json::json!({
+                            "devices": devs
+                        }))
+                    }
                     "device.set_dpi" => {
                         let dpi = req.params.as_ref()
                             .and_then(|p| p.get("dpi"))

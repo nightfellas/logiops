@@ -142,10 +142,21 @@ export const store = reactive({
     }
   },
 
-  refreshBattery() {
-    const now = new Date().toLocaleTimeString();
-    for (const d of this.devices) {
-      d.updatedAt = now;
+  async fetchDevices() {
+    try {
+      const res = await fetch('/api/devices');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.devices) && data.devices.length > 0) {
+          this.devices = data.devices;
+        }
+      }
+    } catch (e) {
+      console.debug('Failed to fetch devices:', e);
     }
+  },
+
+  refreshBattery() {
+    this.fetchDevices();
   },
 });

@@ -110,6 +110,7 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from 'vue';
 import { store } from './stores/deviceStore';
 import BatteryPopover from './components/BatteryPopover.vue';
 import DeviceVisual from './components/DeviceVisual.vue';
@@ -118,4 +119,11 @@ import DpiSlider from './components/DpiSlider.vue';
 import SmartShiftControl from './components/SmartShiftControl.vue';
 import ProfileBar from './components/ProfileBar.vue';
 import { Layers, Zap, Mouse, ChevronRight } from 'lucide-vue-next';
+
+onMounted(() => {
+  store.fetchDevices();
+  setInterval(() => {
+    store.fetchDevices();
+  }, 3000);
+});
 </script>

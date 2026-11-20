@@ -20,14 +20,70 @@ pub struct HidppDevice {
 
 impl HidppDevice {
     pub fn new(slot: u8) -> Self {
+        Self::with_software_id(slot, 0x01)
+    }
+
+    pub fn with_software_id(slot: u8, software_id: u8) -> Self {
         Self {
             slot,
             name: None,
             device_type: None,
             last_battery: None,
             feature_cache: HashMap::new(),
-            software_id: 0x01,
+            software_id,
         }
+    }
+
+    /// Sends a long report and waits for a matching response, filtering out unsolicited notifications and cross-traffic.
+    pub fn send_and_wait_response<T: Transport>(
+        &self,
+        transport: &mut T,
+        req: &HidppReport,
+        timeout_ms: u32,
+    ) -> Result<HidppReport, HidppError> {
+        transport.write_report(&req.to_bytes())?;
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(timeout_ms as u64);
+
+        while start.elapsed() < timeout {
+            let remaining_ms = timeout.saturating_sub(start.elapsed()).as_millis().max(10) as u32;
+            let resp_bytes = transport.read_report(remaining_ms)?;
+            match HidppReport::parse(&resp_bytes) {
+                Ok(parsed) => {
+                    // Ignore packets from other device slots
+                    if parsed.device_slot != self.slot {
+                        continue;
+                    }
+
+                    // Check for HID++ error response: feature_index == 0xFF
+                    if parsed.feature_index == 0xFF {
+                        let err_code = parsed.payload.get(2).copied().unwrap_or(0);
+                        if err_code == 0x04 || err_code == 0x09 {
+                            return Err(HidppError::DeviceOffline);
+                        }
+                        return Err(HidppError::ProtocolError {
+                            code: err_code,
+                            feature_index: req.feature_index,
+                            function_id: req.function_id,
+                        });
+                    }
+
+                    // Match response to our query by matching software_id (lower 4 bits of byte 3)
+                    if (parsed.software_id & 0x0F) == (req.software_id & 0x0F) {
+                        return Ok(parsed);
+                    }
+                }
+                Err(HidppError::DeviceOffline) => {
+                    if resp_bytes.len() >= 2 && resp_bytes[1] == self.slot {
+                        return Err(HidppError::DeviceOffline);
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+
+        Err(HidppError::Timeout)
     }
 
     /// Resolves feature index dynamically by querying the Root feature (0x0000).
@@ -45,10 +101,7 @@ impl HidppDevice {
         report.payload[0] = (feature_id >> 8) as u8;
         report.payload[1] = (feature_id & 0xFF) as u8;
 
-        transport.write_report(&report.to_bytes())?;
-        let resp_bytes = transport.read_report(1000)?;
-        let parsed = HidppReport::parse(&resp_bytes)?;
-
+        let parsed = self.send_and_wait_response(transport, &report, 1000)?;
         let feature_index = parsed.payload.first().copied().unwrap_or(0);
         if feature_index == 0 {
             return Err(HidppError::FeatureNotFound(feature_id));
@@ -64,9 +117,7 @@ impl HidppDevice {
 
         // Function 0: getDeviceNameCount
         let report = HidppReport::new_long(self.slot, feature_index, 0x00, self.software_id);
-        transport.write_report(&report.to_bytes())?;
-        let resp_bytes = transport.read_report(1000)?;
-        let parsed = HidppReport::parse(&resp_bytes)?;
+        let parsed = self.send_and_wait_response(transport, &report, 1000)?;
         let name_len = parsed.payload.first().copied().unwrap_or(0) as usize;
 
         if name_len == 0 {
@@ -80,9 +131,7 @@ impl HidppDevice {
             // Function 1: getDeviceName(charIndex)
             let mut chunk_report = HidppReport::new_long(self.slot, feature_index, 0x01, self.software_id);
             chunk_report.payload[0] = char_index;
-            transport.write_report(&chunk_report.to_bytes())?;
-            let chunk_resp = transport.read_report(1000)?;
-            let parsed_chunk = HidppReport::parse(&chunk_resp)?;
+            let parsed_chunk = self.send_and_wait_response(transport, &chunk_report, 1000)?;
 
             let bytes_to_take = (name_len - name_bytes.len()).min(16);
             name_bytes.extend_from_slice(&parsed_chunk.payload[..bytes_to_take]);
@@ -100,9 +149,7 @@ impl HidppDevice {
 
         // Function 2: getDeviceType
         let report = HidppReport::new_long(self.slot, feature_index, 0x02, self.software_id);
-        transport.write_report(&report.to_bytes())?;
-        let resp_bytes = transport.read_report(1000)?;
-        let parsed = HidppReport::parse(&resp_bytes)?;
+        let parsed = self.send_and_wait_response(transport, &report, 1000)?;
 
         let type_byte = parsed.payload.first().copied().unwrap_or(255);
         let dev_type = DeviceType::from(type_byte);
@@ -119,19 +166,12 @@ impl HidppDevice {
             Ok(feature_index) => {
                 // Function 1: getBatteryStatus
                 let report = HidppReport::new_long(self.slot, feature_index, 0x01, self.software_id);
-                if let Err(e) = transport.write_report(&report.to_bytes()) {
-                    return self.handle_battery_error(e);
-                }
-
-                match transport.read_report(1000) {
-                    Ok(resp_bytes) => match HidppReport::parse(&resp_bytes) {
-                        Ok(parsed) => {
-                            let info = BatteryInfo::from_unified_battery_payload(&parsed.payload);
-                            self.last_battery = Some(info.clone());
-                            Ok(info)
-                        }
-                        Err(e) => self.handle_battery_error(e),
-                    },
+                match self.send_and_wait_response(transport, &report, 1000) {
+                    Ok(parsed) => {
+                        let info = BatteryInfo::from_unified_battery_payload(&parsed.payload);
+                        self.last_battery = Some(info.clone());
+                        Ok(info)
+                    }
                     Err(e) => self.handle_battery_error(e),
                 }
             }
@@ -139,19 +179,12 @@ impl HidppDevice {
                 // Fallback to legacy battery (0x1000)
                 let legacy_res = self.resolve_feature(transport, FEATURE_BATTERY_STATUS)?;
                 let report = HidppReport::new_long(self.slot, legacy_res, 0x00, self.software_id);
-                if let Err(e) = transport.write_report(&report.to_bytes()) {
-                    return self.handle_battery_error(e);
-                }
-
-                match transport.read_report(1000) {
-                    Ok(resp_bytes) => match HidppReport::parse(&resp_bytes) {
-                        Ok(parsed) => {
-                            let info = BatteryInfo::from_legacy_battery_payload(&parsed.payload);
-                            self.last_battery = Some(info.clone());
-                            Ok(info)
-                        }
-                        Err(e) => self.handle_battery_error(e),
-                    },
+                match self.send_and_wait_response(transport, &report, 1000) {
+                    Ok(parsed) => {
+                        let info = BatteryInfo::from_legacy_battery_payload(&parsed.payload);
+                        self.last_battery = Some(info.clone());
+                        Ok(info)
+                    }
                     Err(e) => self.handle_battery_error(e),
                 }
             }
@@ -181,9 +214,7 @@ impl HidppDevice {
 
         // Function 2: getSensorDpi
         let report = HidppReport::new_long(self.slot, feature_index, 0x02, self.software_id);
-        transport.write_report(&report.to_bytes())?;
-        let resp_bytes = transport.read_report(1000)?;
-        let parsed = HidppReport::parse(&resp_bytes)?;
+        let parsed = self.send_and_wait_response(transport, &report, 1000)?;
 
         let current_dpi = u16::from_be_bytes([parsed.payload[1], parsed.payload[2]]);
 
@@ -205,9 +236,7 @@ impl HidppDevice {
         report.payload[1] = (dpi >> 8) as u8;
         report.payload[2] = (dpi & 0xFF) as u8;
 
-        transport.write_report(&report.to_bytes())?;
-        let resp_bytes = transport.read_report(1000)?;
-        let _ = HidppReport::parse(&resp_bytes)?;
+        let _ = self.send_and_wait_response(transport, &report, 1000)?;
         Ok(())
     }
 
@@ -220,9 +249,7 @@ impl HidppDevice {
 
         // Function 0: getSmartShift
         let report = HidppReport::new_long(self.slot, feature_index, 0x00, self.software_id);
-        transport.write_report(&report.to_bytes())?;
-        let resp_bytes = transport.read_report(1000)?;
-        let parsed = HidppReport::parse(&resp_bytes)?;
+        let parsed = self.send_and_wait_response(transport, &report, 1000)?;
 
         let mode_byte = parsed.payload[0];
         let threshold = parsed.payload[1];
@@ -257,9 +284,7 @@ impl HidppDevice {
         };
         report.payload[1] = settings.threshold;
 
-        transport.write_report(&report.to_bytes())?;
-        let resp_bytes = transport.read_report(1000)?;
-        let _ = HidppReport::parse(&resp_bytes)?;
+        let _ = self.send_and_wait_response(transport, &report, 1000)?;
         Ok(())
     }
 
@@ -275,8 +300,7 @@ impl HidppDevice {
             report.payload[2] = 0x03; // Divert flag (0x01 | 0x02 valid bit)
             report.payload[3] = 0x00;
             report.payload[4] = 0x00;
-            let _ = transport.write_report(&report.to_bytes());
-            let _ = transport.read_report(200);
+            let _ = self.send_and_wait_response(transport, &report, 500);
         }
 
         Ok(feature_index)

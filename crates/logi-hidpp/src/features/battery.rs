@@ -42,21 +42,20 @@ impl BatteryInfo {
 
     /// Parse Unified Battery 0x1004 Function 0/1 response payload.
     /// Payload byte 0: Percentage (0..100)
-    /// Payload byte 1: Charging status
-    /// Payload byte 2: External power status / flags
+    /// Payload byte 1: Level (1=critical, 2=low, 4=good, 8=full)
+    /// Payload byte 2: Charging status (0=discharging, 1=charging, 2=full, 3=slow charge)
     pub fn from_unified_battery_payload(payload: &[u8]) -> Self {
         let percentage = payload.first().copied().unwrap_or(0).min(100);
-        let charging_byte = payload.get(1).copied().unwrap_or(0);
-        let critical_byte = payload.get(2).copied().unwrap_or(0);
+        let level_byte = payload.get(1).copied().unwrap_or(0);
+        let status_byte = payload.get(2).copied().unwrap_or(0);
 
-        let (charging, status) = match charging_byte {
-            0x00 => (false, ChargingStatus::Discharging),
-            0x01 | 0x02 => (true, ChargingStatus::Charging),
-            0x03 => (false, ChargingStatus::Full),
-            _ => (false, ChargingStatus::Unknown),
+        let (charging, status) = match status_byte {
+            0x01 | 0x03 => (true, ChargingStatus::Charging),
+            0x02 => (false, ChargingStatus::Full),
+            _ => (false, ChargingStatus::Discharging),
         };
 
-        let critical = (critical_byte & 0x01) != 0 || percentage <= 10;
+        let critical = level_byte == 1 || percentage <= 10;
 
         Self {
             percentage,

@@ -16,14 +16,16 @@ if command -v systemctl > /dev/null 2>&1; then
     systemctl --user disable logioptions-daemon.service 2>/dev/null || true
 fi
 
-# 2. Kill any running daemon
+# 2. Kill any running daemon and GUI
 pkill -x "logid-service" 2>/dev/null || true
+pkill -f "window_launcher.py" 2>/dev/null || true
 
 # 3. Remove files
-echo "Removing binaries, desktop entry, and icons..."
+echo "Removing binaries, desktop entry, autostart, and icons..."
 rm -f "${BIN_DIR}/logid-service"
 rm -f "${BIN_DIR}/logi-options"
 rm -f "${APP_DIR}/logioptions.desktop"
+rm -f "${HOME}/.config/autostart/logioptions.desktop"
 rm -f "${ICON_DIR}/logioptions.svg"
 rm -f "${SYSTEMD_USER_DIR}/logioptions-daemon.service"
 

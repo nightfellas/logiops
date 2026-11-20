@@ -51,8 +51,12 @@ While Logitech peripherals such as the **MX Master 3/3S**, **MX Mechanical / Min
 Inspired by the macOS utility *LogiBatteryBar*, you no longer need to open bulky windows to check your device power:
 * **Multi-Device Support:** Tracks both mouse and keyboard simultaneously on a single Logi Bolt or Unifying receiver.
 * **⚡ USB-C Charging Detection:** Real-time charging state reporting using HID++ 2.0 Unified Battery (`0x1004`). Automatically shows a charging lightning badge.
-* **💤 Smart RF Sleep & Standby Retention:** Logitech peripherals (especially wireless keyboards) enter deep RF sleep when idle. LogiOptions retains the last known battery percentage, marking the device as `Standby (Idle)` rather than resetting to 0% or dropping offline. It immediately reactivates on the first keystroke or movement.
-* **Compact Tray Popover Card:** Clicking the system tray icon presents an elegant bubble popup card displaying color-coded battery progress bars (*Green > 30%*, *Orange 15–30%*, *Red < 15%*), slot IDs, connection status, telemetry timestamps, and a manual refresh trigger.
+* **⚡ Instant Power-Off & Standby Detection:** Leverages native Bolt receiver error reporting (`ERR_CONNECT_FAIL` `0x04`). When a device power switch is turned off, the daemon detects it in under 2ms and updates its status to `Standby (Off)` without I/O timeouts or UI lag.
+* **💤 Smart RF Sleep & Standby Retention:** Wireless Logitech keyboards enter deep RF sleep when idle. LogiOptions retains the last known battery percentage, marking the device as `Standby (Off)` in the tray menu while cleanly keeping the top bar clutter-free. It immediately reactivates on the first keystroke or movement.
+* **Clean Top Bar Widget:** Native GNOME Shell / Ayatana AppIndicator integration with zero visual clutter:
+  * Mouse active: `[Mouse Icon] 70%`
+  * Mouse + Keyboard active: `[Mouse Icon] 70%   ⌨️ 85%`
+  * Charging indicator: `⚡ 70%`
 * **System Wake Hook:** Integrates with systemd / logind DBus (`PrepareForSleep`) to instantly refresh device status the moment your laptop or PC wakes from suspend.
 
 ### 🖱️ 2. Interactive Visual Hardware Mapping
@@ -77,6 +81,7 @@ Inspired by the macOS utility *LogiBatteryBar*, you no longer need to open bulky
   * **Swipe Up:** Maximize Active Window
   * **Swipe Down:** Minimize Active Window / Show Desktop
   * **Tap Click:** Mission Control / Overview (`Super` / `Meta` key)
+* **🔄 Self-Healing Hardware Diversion:** Logitech MX peripherals automatically reset their internal hardware diversion registers back to default when entering deep RF power-saving sleep or upon computer reboot. LogiOptions-Linux implements proactive kernel-event driven self-healing: the instant the mouse detects user interaction (`evdev` motion or click), the daemon verifies and re-asserts the diversion flags in `< 2ms`, ensuring gesture navigation never drops offline.
 
 ### ⚙️ 5. Precision Hardware Controls
 * **Adjustable DPI (Feature `0x2201`):** Smooth resolution adjustment from 200 up to 8000 DPI in 50 DPI steps with one-click presets (800, 1200, 1600, 2400, 4000).
@@ -159,7 +164,8 @@ LogiOptions-Linux includes a complete, one-step installer script:
 2. Builds the frontend UI assets.
 3. Installs executables to `~/.local/bin/`.
 4. Installs the desktop application menu shortcut and scalable SVG icon to `~/.local/share/applications/`.
-5. Configures and starts the background service under `systemctl --user enable --now logioptions-daemon.service`.
+5. Configures desktop autostart (`~/.config/autostart/logioptions.desktop`) with `--tray` so your battery indicator launches seamlessly on graphical login without opening a bulky window.
+6. Configures and starts the background service under `systemctl --user enable --now logioptions-daemon.service`.
 
 Once completed, you can launch the app directly from your application launcher or terminal:
 ```bash
@@ -213,7 +219,7 @@ logiops/
 │   │   │   ├── profile_manager.rs      # JSON profile loader & app matcher
 │   │   │   ├── window_tracker.rs       # Active window focus detector
 │   │   │   ├── virtual_input.rs        # Kernel /dev/uinput synthetic injector
-│   │   │   ├── telemetry.rs            # 60-second periodic battery polling
+│   │   │   ├── telemetry.rs            # Real-time adaptive battery & device presence polling
 │   │   │   ├── safety.rs               # Crash recovery & panic watchdog
 │   │   │   ├── ipc.rs                  # JSON-RPC 2.0 Unix Domain Socket
 │   │   │   └── main.rs                 # Daemon service entry point
@@ -325,6 +331,47 @@ echo '{"jsonrpc": "2.0", "id": 1, "method": "daemon.version"}' | nc -U /run/user
 {"jsonrpc":"2.0","id":1,"result":{"daemon":"logi-daemon","version":"0.1.0"}}
 ```
 
+### List Connected Devices & Real-Time Battery:
+```bash
+echo '{"jsonrpc": "2.0", "id": 1, "method": "device.list"}' | nc -U /run/user/$UID/logioptions.sock
+```
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "devices": [
+      {
+        "id": "bolt:slot_1",
+        "name": "MX Master 3S",
+        "slot": 1,
+        "type": "mouse",
+        "battery": { "percentage": 70, "charging": false, "status": "discharging" },
+        "dpi": { "current": 1600, "min": 200, "max": 8000, "step": 50 }
+      },
+      {
+        "id": "bolt:slot_5",
+        "name": "MX Mechanical Mini",
+        "slot": 5,
+        "type": "keyboard",
+        "battery": { "percentage": 85, "charging": false, "status": "standby" }
+      }
+    ]
+  }
+}
+```
+
+### Change Hardware DPI on the Fly:
+```bash
+echo '{"jsonrpc": "2.0", "id": 1, "method": "device.set_dpi", "params": {"dpi": 2400}}' | nc -U /run/user/$UID/logioptions.sock
+```
+
+### Reload Profile Settings:
+```bash
+echo '{"jsonrpc": "2.0", "id": 1, "method": "profile.reload"}' | nc -U /run/user/$UID/logioptions.sock
+```
+
 ### Battery Update Broadcast Event:
 ```json
 {
@@ -355,10 +402,23 @@ echo '{"jsonrpc": "2.0", "id": 1, "method": "daemon.version"}' | nc -U /run/user
   ```
   Ensure your user is in the `plugdev` group (`groups $USER`).
 
-#### 2. Why does my keyboard show `Standby (Idle)`?
-* **Explanation:** Wireless Logitech keyboards enter an aggressive RF sleep timer after a few seconds of inactivity to preserve battery life. LogiOptions retains the last valid battery percentage and marks it as `Standby (Idle)`. The moment any key is pressed, it immediately returns to active.
+#### 2. Why does my keyboard show `Standby (Off)` in the menu or disappear from the top bar?
+* **Explanation:** Wireless Logitech keyboards enter an aggressive RF sleep timer after a few seconds of inactivity to preserve battery life, or are physically turned off. LogiOptions retains the last known battery percentage, marking the device as `Standby (Off)` in the dropdown menu while omitting it from the top bar to keep the panel clean. The moment the keyboard wakes up or is switched on, the top bar re-displays it within 2 seconds.
 
-#### 3. How do I preview or develop the UI in a browser?
+#### 3. Gesture button not working after computer reboot?
+* **Explanation:** Logitech MX mice firmware resets reprogrammable button diversion registers upon deep RF sleep or boot. LogiOptions-Linux includes kernel-event-driven self-healing diversion that automatically re-asserts diversion flags on your very first mouse movement after waking up. If gesture actions are still unresponsive, verify that another tool (such as Solaar with button diversion enabled or an old `logid` service) is not holding exclusive locks on the Bolt receiver's hidraw interface. You can restart the daemon at any time:
+  ```bash
+  systemctl --user restart logioptions-daemon.service
+  ```
+
+#### 4. Top bar tray icon does not appear in GNOME:
+* GNOME Shell requires the AppIndicator extension to show tray icons:
+  ```bash
+  sudo apt install gnome-shell-extension-appindicator
+  ```
+  Enable it via the GNOME Extensions app.
+
+#### 5. How do I preview or develop the UI in a browser?
 * Run the Vite development server:
   ```bash
   cd crates/logi-gui/ui
@@ -366,7 +426,7 @@ echo '{"jsonrpc": "2.0", "id": 1, "method": "daemon.version"}' | nc -U /run/user
   ```
   Open `http://localhost:5173` in your browser.
 
-#### 4. How do I completely uninstall LogiOptions-Linux?
+#### 6. How do I completely uninstall LogiOptions-Linux?
 * Run the included uninstall script:
   ```bash
   ./packaging/uninstall.sh

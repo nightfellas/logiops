@@ -125,21 +125,38 @@ impl InputListener {
             }
 
             // Also find and attach to HID++ node for reprogrammable button diversion (gesture button 0x00C3, mode shift 0x00C4)
-            let receivers = logi_hidpp::discovery::scan_receivers();
+            let mut receivers = logi_hidpp::discovery::scan_receivers();
             let mut hidraw_file = None;
             let mut reprog_feature_index: Option<u8> = None;
+            let mut receiver_path = receivers.first().map(|r| r.hidraw_path.clone());
 
-            for r in &receivers {
-                if let Ok(mut transport) = logi_hidpp::HidrawTransport::open(&r.hidraw_path) {
-                    let mut dev = logi_hidpp::HidppDevice::new(1);
-                    if let Ok(feat_idx) = dev.divert_reprogrammable_controls(&mut transport) {
-                        tracing::info!("Diverted reprogrammable controls (Gesture & Mode Shift) on feature index 0x{:02x}", feat_idx);
-                        reprog_feature_index = Some(feat_idx);
+            let divert_controls = |path: &std::path::Path| -> Option<u8> {
+                if let Ok(mut transport) = logi_hidpp::HidrawTransport::open(path) {
+                    let mut dev = logi_hidpp::HidppDevice::with_software_id(1, 0x01);
+                    match dev.divert_reprogrammable_controls(&mut transport) {
+                        Ok(feat_idx) => {
+                            tracing::info!("Diverted reprogrammable controls (Gesture & Mode Shift) on feature index 0x{:02x}", feat_idx);
+                            return Some(feat_idx);
+                        }
+                        Err(e) => {
+                            tracing::debug!("Divert attempt deferred: {:?}", e);
+                        }
                     }
                 }
-                if let Ok(f) = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NONBLOCK).open(&r.hidraw_path) {
+                None
+            };
+
+            if let Some(ref path) = receiver_path {
+                for _ in 0..3 {
+                    if let Some(feat_idx) = divert_controls(path) {
+                        reprog_feature_index = Some(feat_idx);
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                }
+
+                if let Ok(f) = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NONBLOCK).open(path) {
                     hidraw_file = Some(f);
-                    break;
                 }
             }
 
@@ -147,6 +164,7 @@ impl InputListener {
             let mut hid_buf = [0u8; 64];
             let mut gesture_button_held = false;
             let mut mode_shift_held = false;
+            let mut last_divert_retry = std::time::Instant::now() - std::time::Duration::from_secs(10);
 
             while self.running.load(Ordering::SeqCst) {
                 let mut pollfds = Vec::new();
@@ -236,6 +254,28 @@ impl InputListener {
 
                 // 2. Process Mouse evdev events
                 if (pollfds[0].revents & libc::POLLIN) != 0 {
+                    // Self-healing diversion: if controls were not diverted at startup (e.g. mouse in RF sleep at boot),
+                    // incoming evdev events prove the mouse is awake and ready. Re-attempt diversion immediately.
+                    if (reprog_feature_index.is_none() && last_divert_retry.elapsed() >= std::time::Duration::from_millis(1500))
+                        || (last_divert_retry.elapsed() >= std::time::Duration::from_secs(60))
+                    {
+                        last_divert_retry = std::time::Instant::now();
+                        if receiver_path.is_none() {
+                            receivers = logi_hidpp::discovery::scan_receivers();
+                            receiver_path = receivers.first().map(|r| r.hidraw_path.clone());
+                        }
+                        if let Some(ref path) = receiver_path {
+                            if let Some(feat_idx) = divert_controls(path) {
+                                reprog_feature_index = Some(feat_idx);
+                            }
+                            if hidraw_file.is_none() {
+                                if let Ok(f) = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NONBLOCK).open(path) {
+                                    hidraw_file = Some(f);
+                                }
+                            }
+                        }
+                    }
+
                     while let Ok(n) = file.read(&mut event_buf) {
                         if n < event_buf.len() { break; }
 

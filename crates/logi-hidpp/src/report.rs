@@ -88,8 +88,8 @@ impl HidppReport {
             let error_function = (bytes[4] >> 4) & 0x0F;
             let error_code = bytes[5];
             
-            // Error code 0x09 often indicates device is offline / asleep in RF
-            if error_code == 0x09 {
+            // Error code 0x04 indicates connect fail / device disconnected; 0x09 indicates sleep / resource error
+            if error_code == 0x04 || error_code == 0x09 {
                 return Err(HidppError::DeviceOffline);
             }
 

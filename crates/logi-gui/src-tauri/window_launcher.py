@@ -4,7 +4,24 @@ import sys
 import json
 import threading
 import socket
+import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+# Single-instance check: if another instance is already serving on 8765
+try:
+    req = urllib.request.Request("http://127.0.0.1:8765/api/ping", headers={"User-Agent": "LogiOptions"})
+    with urllib.request.urlopen(req, timeout=0.3) as response:
+        if response.status == 200:
+            if "--tray" not in sys.argv and "--minimized" not in sys.argv:
+                post_req = urllib.request.Request("http://127.0.0.1:8765/api/show_window", data=b"{}", headers={"Content-Type": "application/json"})
+                try:
+                    urllib.request.urlopen(post_req, timeout=0.5)
+                except Exception:
+                    pass
+            print("LogiOptions is already running in the background. Window activated.")
+            sys.exit(0)
+except Exception:
+    pass
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "../../ui/dist"))
@@ -27,12 +44,61 @@ def send_ipc(method, params=None):
     except Exception as e:
         print("IPC send error:", e)
 
+def request_ipc(method, params=None):
+    try:
+        sock_path = f"/run/user/{os.getuid()}/logioptions.sock"
+        if os.path.exists(sock_path):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(1.0)
+                s.connect(sock_path)
+                msg = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}) + "\n"
+                s.sendall(msg.encode())
+                res = s.recv(8192)
+                if res:
+                    return json.loads(res.decode('utf-8'))
+    except Exception as e:
+        print("IPC request error:", e)
+    return None
+
 # Custom HTTP handler with API support
 class LogiOptionsHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIST_DIR, **kwargs)
 
+    def do_GET(self):
+        if self.path == "/api/ping":
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(b'{"status":"pong"}')
+            return
+        if self.path == "/api/devices":
+            resp = request_ipc("device.list")
+            devices = resp.get("result", {}).get("devices", []) if resp else []
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({"devices": devices}).encode('utf-8'))
+            return
+        super().do_GET()
+
     def do_POST(self):
+        if self.path == "/api/show_window":
+            try:
+                from gi.repository import GLib
+                if 'win' in globals():
+                    GLib.idle_add(lambda: (win.show_all(), win.present()))
+            except Exception as e:
+                print("Error presenting window:", e)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+            return
+
         if self.path == "/api/set_dpi":
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(length)
@@ -186,7 +252,7 @@ try:
             indicator_mod.IndicatorCategory.HARDWARE
         )
         ind.set_status(indicator_mod.IndicatorStatus.ACTIVE)
-        ind.set_label("🖱️ 75%", "🖱️ 100%")
+        ind.set_label("...", "...")
 
         # Top Bar Tray Menu
         menu = Gtk.Menu()
@@ -198,9 +264,13 @@ try:
         item_open.connect("activate", open_window)
         menu.append(item_open)
 
-        item_status = Gtk.MenuItem(label="MX Master 3S: 75% (Slot 1)")
-        item_status.set_sensitive(False)
-        menu.append(item_status)
+        item_status_mouse = Gtk.MenuItem(label="🖱️ MX Master 3S: --")
+        item_status_mouse.set_sensitive(False)
+        menu.append(item_status_mouse)
+
+        item_status_kb = Gtk.MenuItem(label="⌨️ MX Mechanical Mini: --")
+        item_status_kb.set_sensitive(False)
+        menu.append(item_status_kb)
 
         item_sep = Gtk.SeparatorMenuItem()
         menu.append(item_sep)
@@ -212,8 +282,67 @@ try:
         menu.show_all()
         ind.set_menu(menu)
 
-    win.show_all()
-    win.present()
+        from gi.repository import GLib
+
+        def update_tray_status():
+            try:
+                resp = request_ipc("device.list")
+                if resp and "result" in resp and "devices" in resp["result"]:
+                    devs = resp["result"]["devices"]
+                    mouse_pct = None
+                    mouse_charging = False
+                    kb_pct = None
+                    kb_charging = False
+
+                    for d in devs:
+                        dtype = d.get("type")
+                        batt = d.get("battery", {})
+                        pct = batt.get("percentage")
+                        status = batt.get("status")
+                        is_standby = status == "standby"
+                        charging = batt.get("charging", False)
+                        name = d.get("name", "")
+
+                        if dtype == "mouse":
+                            if is_standby:
+                                item_status_mouse.set_label(f"🖱️ {name}: Standby (Off)")
+                            else:
+                                mouse_pct = pct
+                                mouse_charging = charging
+                                chg_icon = "⚡" if charging else ""
+                                item_status_mouse.set_label(f"🖱️ {name}: {pct}% {chg_icon}")
+                        elif dtype == "keyboard":
+                            if is_standby:
+                                item_status_kb.set_label(f"⌨️ {name}: Standby (Off)")
+                            else:
+                                kb_pct = pct
+                                kb_charging = charging
+                                chg_icon = "⚡" if charging else ""
+                                item_status_kb.set_label(f"⌨️ {name}: {pct}% {chg_icon}")
+
+                    parts = []
+                    if mouse_pct is not None:
+                        chg_prefix = "⚡ " if mouse_charging else ""
+                        parts.append(f"{chg_prefix}{mouse_pct}%")
+                    if kb_pct is not None:
+                        chg_prefix = "⚡ " if kb_charging else ""
+                        parts.append(f"⌨️ {chg_prefix}{kb_pct}%")
+
+                    label_str = "   ".join(parts) if parts else "Off"
+                    ind.set_label(label_str, label_str)
+            except Exception as e:
+                print("Error updating tray status:", e)
+            return True # Keep timer firing
+
+        GLib.timeout_add_seconds(2, update_tray_status)
+        GLib.idle_add(update_tray_status)
+
+    start_in_tray = "--tray" in sys.argv or "--minimized" in sys.argv
+    if not start_in_tray:
+        win.show_all()
+        win.present()
+    else:
+        win.realize()
 
     Gtk.main()
     sys.exit(0)

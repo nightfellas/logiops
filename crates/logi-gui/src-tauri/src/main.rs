@@ -38,6 +38,7 @@ fn main() {
         println!("Launching GUI window via {:?}", launcher);
         let status = Command::new("python3")
             .arg(&launcher)
+            .args(std::env::args().skip(1))
             .status();
 
         match status {

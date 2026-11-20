@@ -55,6 +55,23 @@ install -m 644 "${REPO_ROOT}/assets/icons/logioptions.svg" "${ICON_DIR}/logiopti
 sed "s|Exec=logi-options|Exec=${BIN_DIR}/logi-options|g" "${REPO_ROOT}/packaging/appimage/logioptions.desktop" > "${APP_DIR}/logioptions.desktop"
 chmod 644 "${APP_DIR}/logioptions.desktop"
 
+# Configure desktop autostart (Top Bar Battery Tray Widget on login)
+AUTOSTART_DIR="${HOME}/.config/autostart"
+mkdir -p "${AUTOSTART_DIR}"
+cat <<EOF > "${AUTOSTART_DIR}/logioptions.desktop"
+[Desktop Entry]
+Name=LogiOptions Tray
+Comment=Logitech MX Battery and Gesture Companion
+Exec=${BIN_DIR}/logi-options --tray
+Icon=logioptions
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;Utility;
+X-GNOME-Autostart-enabled=true
+EOF
+chmod 644 "${AUTOSTART_DIR}/logioptions.desktop"
+echo "✅ Desktop autostart configured in ~/.config/autostart/logioptions.desktop."
+
 # 6. Configure systemd user daemon
 echo "⚙️ Setting up systemd background service..."
 sed "s|/usr/local/bin/logid-service|${BIN_DIR}/logid-service|g" "${REPO_ROOT}/packaging/systemd/logioptions-daemon.service" > "${SYSTEMD_USER_DIR}/logioptions-daemon.service"
