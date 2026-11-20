@@ -1,0 +1,20 @@
+[package]
+name = "logi-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Background daemon for LogiOptions-Linux managing device state, gestures, and active window profiles"
+
+[dependencies]
+logi-hidpp = { path = "../logi-hidpp" }
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc = "0.2"
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "logid-service"
+path = "src/main.rs"

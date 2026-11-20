@@ -1,0 +1,14 @@
+[Unit]
+Description=LogiOptions-Linux Background Service
+Documentation=https://github.com/yusuf/logiops
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/logid-service
+Restart=on-failure
+RestartSec=3s
+Environment="RUST_LOG=info"
+
+[Install]
+WantedBy=default.target

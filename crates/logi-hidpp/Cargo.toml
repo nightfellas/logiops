@@ -1,0 +1,15 @@
+[package]
+name = "logi-hidpp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Logitech HID++ 1.0/2.0/4.0 protocol implementation and hardware driver for Linux"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_json.workspace = true

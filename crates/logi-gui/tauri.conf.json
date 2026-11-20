@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LogiOptions-Linux",
+  "version": "0.1.0",
+  "identifier": "com.logioptions.linux",
+  "build": {
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LogiOptions-Linux",
+        "width": 1050,
+        "height": 720,
+        "resizable": true,
+        "transparent": false
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "tooltip": "LogiBatteryBar - Logitech MX Monitor"
+    }
+  }
+}

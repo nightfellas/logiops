@@ -1,0 +1,17 @@
+# Logitech HID++ udev rules for LogiOptions-Linux
+# Grants the active desktop user access to Logitech Bolt, Unifying, and Bluetooth devices, as well as /dev/uinput.
+
+# Logi Bolt USB Receiver (VID: 0x046d, PID: 0xc548)
+KERNEL=="hidraw*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c548", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+KERNEL=="event*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c548", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Logi Unifying Receiver (VID: 0x046d, PID: 0xc52b)
+KERNEL=="hidraw*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c52b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+KERNEL=="event*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c52b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Logitech Bluetooth Direct Devices
+KERNEL=="hidraw*", KERNELS=="*046D:*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+KERNEL=="event*", KERNELS=="*046D:*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Virtual Input device creation for gestures and remapped actions
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="plugdev", TAG+="uaccess"

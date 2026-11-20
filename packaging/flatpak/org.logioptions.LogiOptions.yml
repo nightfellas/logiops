@@ -1,0 +1,28 @@
+app-id: org.logioptions.LogiOptions
+runtime: org.gnome.Platform
+runtime-version: '46'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: logi-options
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=all
+  - --filesystem=xdg-config/logioptions:create
+  - --talk-name=org.freedesktop.login1
+
+modules:
+  - name: logioptions
+    buildsystem: simple
+    build-commands:
+      - cargo build --release
+      - install -Dm755 target/release/logid-service /app/bin/logid-service
+      - install -Dm755 target/release/logi-options /app/bin/logi-options
+      - install -Dm644 packaging/appimage/logioptions.desktop /app/share/applications/org.logioptions.LogiOptions.desktop
+      - install -Dm644 assets/icons/logioptions.svg /app/share/icons/hicolor/scalable/apps/org.logioptions.LogiOptions.svg
+    sources:
+      - type: dir
+        path: ../../

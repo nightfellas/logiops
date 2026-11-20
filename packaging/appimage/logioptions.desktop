@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=LogiOptions
+GenericName=Logitech MX Device Manager
+Comment=Modern companion utility and battery monitor for Logitech MX peripherals
+Exec=logi-options %u
+Icon=logioptions
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;Utility;
+Keywords=Logitech;Logi;Mouse;Keyboard;Battery;MX;Options;Bolt;
+StartupNotify=true
+StartupWMClass=LogiOptions-Linux
